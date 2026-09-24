@@ -1051,9 +1051,12 @@ end)
 local Main : Frame = LunaUI.SmartWindow
 
 Main.BorderSizePixel = 0
+
+-- Keep the library's existing strokes hidden, while allowing the dedicated
+-- window outline/glow strokes below to remain visible.
 pcall(function()
 	for _, v in ipairs(LunaUI:GetDescendants()) do
-		if v:IsA("UIStroke") then
+		if v:IsA("UIStroke") and v.Name ~= "LunaMainOutline" and v.Name ~= "LunaMainGlow" and v.Name ~= "LunaMainGlowOuter" then
 			v.Thickness = 0
 			v.Transparency = 1
 		end
@@ -1062,11 +1065,134 @@ pcall(function()
 		end
 	end
 	LunaUI.DescendantAdded:Connect(function(v)
-		if v:IsA("UIStroke") then
+		if v:IsA("UIStroke") and v.Name ~= "LunaMainOutline" and v.Name ~= "LunaMainGlow" and v.Name ~= "LunaMainGlowOuter" then
 			v.Thickness = 0
 			v.Transparency = 1
 		end
 	end)
+end)
+
+-- Automatically pick a reasonably saturated color already used by the UI.
+-- If the current UI is neutral, fall back to the library's theme gradient.
+local function GetThemeAccent()
+	local bestColor, bestScore = nil, -1
+
+	local function consider(color)
+		if typeof(color) ~= "Color3" then return end
+		local h, sat, value = color:ToHSV()
+		local score = sat * 0.85 + value * 0.15
+		if value > 0.08 and value < 0.98 and sat > 0.18 and score > bestScore then
+			bestColor, bestScore = color, score
+		end
+	end
+
+	for _, v in ipairs(Main:GetDescendants()) do
+		if v:IsA("UIStroke") then
+			consider(v.Color)
+		elseif v:IsA("UIGradient") then
+			for _, keypoint in ipairs(v.Color.Keypoints) do
+				consider(keypoint.Value)
+			end
+		elseif v:IsA("TextLabel") or v:IsA("TextButton") or v:IsA("TextBox") then
+			consider(v.TextColor3)
+		elseif v:IsA("ImageLabel") or v:IsA("ImageButton") then
+			consider(v.ImageColor3)
+		elseif v:IsA("Frame") then
+			consider(v.BackgroundColor3)
+		end
+	end
+
+	if bestColor then
+		return bestColor
+	end
+
+	local keypoints = Luna.ThemeGradient.Keypoints
+	return keypoints[math.ceil(#keypoints / 2)].Value
+end
+
+local MainAccent = GetThemeAccent()
+
+-- Dedicated 1–2px outline.
+local MainOutline = Main:FindFirstChild("LunaMainOutline")
+if not MainOutline then
+	MainOutline = Instance.new("UIStroke")
+	MainOutline.Name = "LunaMainOutline"
+	MainOutline.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	MainOutline.LineJoinMode = Enum.LineJoinMode.Round
+	MainOutline.Thickness = 1.5
+	MainOutline.Transparency = 0.12
+	MainOutline.Color = MainAccent
+	MainOutline.Parent = Main
+end
+
+-- Transparent sibling frames keep the glow behind the real UI.
+local GlowHolder = Main.Parent:FindFirstChild("LunaMainGlowHolder")
+if not GlowHolder then
+	GlowHolder = Instance.new("Frame")
+	GlowHolder.Name = "LunaMainGlowHolder"
+	GlowHolder.BackgroundTransparency = 1
+	GlowHolder.BorderSizePixel = 0
+	GlowHolder.Active = false
+	GlowHolder.Selectable = false
+	GlowHolder.ZIndex = math.max(0, Main.ZIndex - 2)
+	GlowHolder.Parent = Main.Parent
+end
+
+local function SyncGlow()
+	GlowHolder.Position = Main.Position
+	GlowHolder.Size = Main.Size
+	GlowHolder.Rotation = Main.Rotation
+end
+
+local function CopyWindowCorner(source, target)
+	local sourceCorner
+	for _, v in ipairs(source:GetDescendants()) do
+		if v:IsA("UICorner") then
+			sourceCorner = v
+			break
+		end
+	end
+
+	local corner = target:FindFirstChild("LunaGlowCorner") or Instance.new("UICorner")
+	corner.Name = "LunaGlowCorner"
+	corner.CornerRadius = sourceCorner and sourceCorner.CornerRadius or UDim.new(0, 10)
+	corner.Parent = target
+end
+
+CopyWindowCorner(Main, GlowHolder)
+
+local GlowOuter = GlowHolder:FindFirstChild("LunaMainGlowOuter")
+if not GlowOuter then
+	GlowOuter = Instance.new("UIStroke")
+	GlowOuter.Name = "LunaMainGlowOuter"
+	GlowOuter.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	GlowOuter.LineJoinMode = Enum.LineJoinMode.Round
+	GlowOuter.Thickness = 10
+	GlowOuter.Transparency = 0.94
+	GlowOuter.Color = MainAccent
+	GlowOuter.Parent = GlowHolder
+end
+
+local GlowInner = GlowHolder:FindFirstChild("LunaMainGlow")
+if not GlowInner then
+	GlowInner = Instance.new("UIStroke")
+	GlowInner.Name = "LunaMainGlow"
+	GlowInner.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	GlowInner.LineJoinMode = Enum.LineJoinMode.Round
+	GlowInner.Thickness = 5
+	GlowInner.Transparency = 0.88
+	GlowInner.Color = MainAccent
+	GlowInner.Parent = GlowHolder
+end
+
+GlowHolder.Visible = Main.Visible
+SyncGlow()
+
+Main:GetPropertyChangedSignal("Position"):Connect(SyncGlow)
+Main:GetPropertyChangedSignal("Size"):Connect(SyncGlow)
+Main:GetPropertyChangedSignal("Rotation"):Connect(SyncGlow)
+Main:GetPropertyChangedSignal("Visible"):Connect(function()
+	GlowHolder.Visible = Main.Visible
 end)
 
 local Dragger = Main.Drag
@@ -1082,60 +1208,94 @@ local KeySystem : Frame = Main.KeySystem
 
 local function Draggable(Bar, Window, enableTaptic, tapticOffset)
 	pcall(function()
-		local Dragging, DragInput, MousePos, FramePos
+		if not Bar or not Window then return end
 
-		local function connectFunctions()
-			if dragBar and enableTaptic then
-				dragBar.MouseEnter:Connect(function()
-					if not Dragging then
-						TweenService:Create(dragBarCosmetic, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {BackgroundTransparency = 0.5, Size = UDim2.new(0, 120, 0, 4)}):Play()
-					end
-				end)
-				dragBar.MouseLeave:Connect(function()
-					if not Dragging then
-						TweenService:Create(dragBarCosmetic, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {BackgroundTransparency = 0.7, Size = UDim2.new(0, 100, 0, 4)}):Play()
-					end
-				end)
-			end
+		local Dragging = false
+		local DragInput = nil
+		local MousePos = nil
+		local FramePos = nil
+
+		local function updateTaptic(hovered)
+			if not (dragBar and enableTaptic and dragBarCosmetic) then return end
+			TweenService:Create(
+				dragBarCosmetic,
+				TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+				{
+					BackgroundTransparency = hovered and 0.5 or 0.7,
+					Size = UDim2.new(0, hovered and 120 or 100, 0, 4)
+				}
+			):Play()
 		end
 
-		connectFunctions()
+		if dragBar and enableTaptic then
+			Bar.MouseEnter:Connect(function()
+				if not Dragging then updateTaptic(true) end
+			end)
+			Bar.MouseLeave:Connect(function()
+				if not Dragging then updateTaptic(false) end
+			end)
+		end
 
 		Bar.InputBegan:Connect(function(Input)
-			if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
+			if Input.UserInputType == Enum.UserInputType.MouseButton1
+				or Input.UserInputType == Enum.UserInputType.Touch then
+
 				Dragging = true
+				DragInput = nil
 				MousePos = Input.Position
 				FramePos = Window.Position
-				if enableTaptic then
-					TweenService:Create(dragBarCosmetic, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Size = UDim2.new(0, 110, 0, 4), BackgroundTransparency = 0}):Play()
+
+				if enableTaptic and dragBarCosmetic then
+					TweenService:Create(
+						dragBarCosmetic,
+						TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+						{Size = UDim2.new(0, 110, 0, 4), BackgroundTransparency = 0}
+					):Play()
 				end
+
 				Input.Changed:Connect(function()
 					if Input.UserInputState == Enum.UserInputState.End then
 						Dragging = false
-						connectFunctions()
-						if enableTaptic then
-							TweenService:Create(dragBarCosmetic, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Size = UDim2.new(0, 100, 0, 4), BackgroundTransparency = 0.7}):Play()
-						end
+						updateTaptic(false)
 					end
 				end)
 			end
 		end)
 
 		Bar.InputChanged:Connect(function(Input)
-			if Input.UserInputType == Enum.UserInputType.MouseMovement or Input.UserInputType == Enum.UserInputType.Touch then
+			if Input.UserInputType == Enum.UserInputType.MouseMovement
+				or Input.UserInputType == Enum.UserInputType.Touch then
 				DragInput = Input
 			end
 		end)
 
 		UserInputService.InputChanged:Connect(function(Input)
-			if Input == DragInput and Dragging then
-				local Delta = Input.Position - MousePos
-				local newMainPosition = UDim2.new(FramePos.X.Scale, FramePos.X.Offset + Delta.X, FramePos.Y.Scale, FramePos.Y.Offset + Delta.Y)
-				TweenService:Create(Window, TweenInfo.new(0.35, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out), {Position = newMainPosition}):Play()
-				if dragBar then
-					local newDragBarPosition = UDim2.new(FramePos.X.Scale, FramePos.X.Offset + Delta.X, FramePos.Y.Scale, FramePos.Y.Offset + Delta.Y + 240)
-					dragBar.Position = newDragBarPosition
-				end
+			if not (Dragging and DragInput and Input == DragInput and FramePos and MousePos) then return end
+
+			local Delta = Input.Position - MousePos
+			local viewport = Camera.ViewportSize
+			local size = Window.AbsoluteSize
+
+			-- Preserve scale while clamping the final absolute position to the viewport.
+			local baseX = FramePos.X.Scale * viewport.X
+			local baseY = FramePos.Y.Scale * viewport.Y
+			local minOffsetX = -baseX
+			local maxOffsetX = viewport.X - size.X - baseX
+			local minOffsetY = -baseY
+			local maxOffsetY = viewport.Y - size.Y - baseY
+			local x = math.clamp(FramePos.X.Offset + Delta.X, minOffsetX, math.max(minOffsetX, maxOffsetX))
+			local y = math.clamp(FramePos.Y.Offset + Delta.Y, minOffsetY, math.max(minOffsetY, maxOffsetY))
+
+			Window.Position = UDim2.new(FramePos.X.Scale, x, FramePos.Y.Scale, y)
+			SyncGlow()
+
+			if dragBar then
+				dragBar.Position = UDim2.new(
+					FramePos.X.Scale,
+					FramePos.X.Offset + Delta.X,
+					FramePos.Y.Scale,
+					FramePos.Y.Offset + Delta.Y + (tapticOffset or 0)
+				)
 			end
 		end)
 	end)
@@ -1344,7 +1504,8 @@ function Luna:CreateWindow(WindowSettings)
 	Main.Logo.Visible = false
 	Main.Controls.Close.Visible = false
 	Main.Controls.ToggleSize.Visible = false
-	Dragger.Visible = false
+	Dragger.Visible = true
+	Dragger.BackgroundTransparency = 1
 	dragBar.Visible = false
 	for _, v in pairs(Main.Controls:GetChildren()) do
 		if v.ClassName == "Frame" then
