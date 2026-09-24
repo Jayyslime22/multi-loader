@@ -1056,7 +1056,7 @@ Main.BorderSizePixel = 0
 -- window outline/glow strokes below to remain visible.
 pcall(function()
 	for _, v in ipairs(LunaUI:GetDescendants()) do
-		if v:IsA("UIStroke") and v.Name ~= "LunaMainOutline" and v.Name ~= "LunaMainGlow" and v.Name ~= "LunaMainGlowOuter" then
+		if v:IsA("UIStroke") then
 			v.Thickness = 0
 			v.Transparency = 1
 		end
@@ -1065,7 +1065,7 @@ pcall(function()
 		end
 	end
 	LunaUI.DescendantAdded:Connect(function(v)
-		if v:IsA("UIStroke") and v.Name ~= "LunaMainOutline" and v.Name ~= "LunaMainGlow" and v.Name ~= "LunaMainGlowOuter" then
+		if v:IsA("UIStroke") then
 			v.Thickness = 0
 			v.Transparency = 1
 		end
