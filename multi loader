@@ -1740,7 +1740,7 @@ function Luna:CreateWindow(WindowSettings)
 		badgeLabel.ZIndex = 12
 
 		if PlayerAccessType == "lifetime" then
-			badgeLabel.Text = "/hio"
+			badgeLabel.Text = "/JxvHub"
 			badgeLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
 			badgeLabel.TextStrokeTransparency = 1
 			badgeLabel.TextSize = 10
